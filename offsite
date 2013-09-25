@@ -1,0 +1,260 @@
+#!/bin/bash
+
+#
+# offsite - prepares usb storage for use or removal
+#
+# 2013.0923.01 Maxwell Spangler
+#
+
+# Acquire command line parameters or set default to null
+MY_ACTION=${1:-"null"}
+MY_DRIVE=${2:-"null"}
+
+# Show user the syntax if they didn't provide the parameters we require
+function usage {
+	echo "offsite - tool for working with offsite backup drives"
+	echo
+	echo "Syntax: offsite <action> <device>"
+	echo
+	echo "Actions 'dock' or 'undock'"
+	echo
+	echo "dock - make the drive accessible for backups"
+	echo "undock - prepare the drive to be physically removed"
+	echo
+	echo "Devices 'usb3' or 'usb2'"
+	echo
+	echo "Each device is associated with a different physical dock."
+	echo
+	echo "Commands must be in all lowercase."
+}
+
+# Check to see if the device is opened by LUKS
+function check_luks {
+
+	# Our dock exists as a symlink, it's prepare it for use or removal.
+	if [[ `cryptsetup status $LUKS_DEV` == "/dev/mapper/$LUKS_DEV is inactive." ]]
+	then
+		LUKS_ACTIVE="inactive"
+	else
+		LUKS_ACTIVE="active"
+	fi
+}
+
+if [[ $MY_ACTION == "dock" || $MY_ACTION == "undock" || $MY_ACTION == "status" ]] && \
+   [[ $MY_DRIVE == "usb2" || $MY_DRIVE == "usb3" ]] 
+then
+
+	# The symlink'd name of our dock storage as a whole
+	BLOCK_DEV="/dev/${MY_DRIVE}dock"									# /dev/usb2dock
+
+	# The first partition on our symlink'd storage device
+	BLOCK_DEV_README_PARTITION="/dev/${MY_DRIVE}dock1"	# /dev/usb2dock1 - part1=README, 2=backups
+
+	# The second partition on our symlink'd storage device
+	BLOCK_DEV_LUKS_PARTITION="/dev/${MY_DRIVE}dock2"	# /dev/usb2dock2 - part1=README, 2=backups
+
+	# The alias used by LUKS/cryptsetup when opening the encrypted partition (above)
+	LUKS_DEV=$MY_DRIVE											 					# usb2/usb3
+
+	# The unencrypted LUKS partition mapped in dev
+	MAPPER_POINT=/dev/mapper/$MY_DRIVE								# /dev/mapper/usb2
+
+	# The mount point where we make the LUKS partition's filesystem available
+	MOUNT_POINT=/mnt/$MY_DRIVE												# /mnt/usb2 /mnt/usb3
+
+	echo -e "\n\noffsite - version 2013.0924.01\n"
+
+	# Does our device exist as a symlink?
+	if [[ -h $BLOCK_DEV ]]
+	then
+
+		# Device is present, let's process dock or undock
+
+		# Default active check to empty
+		LUKS_ACTIVE=""
+		# Check to see if this device is opened by LUKS
+		check_luks
+
+		# Process for docking starts here
+		if [[ $MY_ACTION == "dock" ]]
+		then
+
+			echo "Step 1: See if the encrypted storage on the dock is already available."
+
+			if [[ $LUKS_ACTIVE == "active" ]]
+			then
+				echo
+				echo "Error: This device is already docked and should be accessible."
+				echo
+				echo "You'll need to 'undock' it before you can perform the 'dock' process again."
+				exit 1
+			else
+
+				echo "        The storage is not available, we can perform the 'dock' process."
+				echo
+				echo "Step 2: Open the encrypted storage portion of the hard drive."
+				echo
+
+				# cryptsetup luksOpen /dev/usb3disk2 usb3
+				cryptsetup luksOpen $BLOCK_DEV_LUKS_PARTITION $LUKS_DEV
+
+				# If cryptsetup exists with an error, bail out.
+				if (( $? != 0 ))
+				then
+					echo "Error: You haven't provided the right password to open the drive. Please try again."
+					exit 1
+				else
+
+					echo "        The encrypted storage has successfully been opened."
+					echo
+					echo "Step 3: Mount the filesystem on the encrypted storage device so we can access it."
+					echo
+					# mount /dev/mapper/usb2 /mnt/usb2
+					mount $MAPPER_POINT $MOUNT_POINT
+
+					if (( $? != 0 ))
+					then
+						echo "I am unable to mount the filesystem on /dev/mapper/$LUKS_DEV. Call for help!"
+						exit 1
+					else
+						# Filesystem on opened LUKS device mounted successfully
+
+						mount | fgrep "/mnt/usb3"
+						df -h $MAPPER_POINT
+
+						echo
+						echo "Success! The storage in dock $MY_DRIVE should now be available for use."
+						echo
+						echo "Please don't remove it without executing 'offsite undock $MY_DRIVE' first."
+						echo
+
+					fi
+
+				fi # endif - dock process, did we open it with luksOpen successfully?
+			fi # endif - dock process, is device active?
+
+		elif [[ $MY_ACTION == "undock" ]]
+		then
+			# Process for undocking starts here
+
+			echo "Step 1: Verify that we see an already open and unecrypted storage device."
+			echo
+
+			if [[ $LUKS_ACTIVE == "active" ]]
+			then
+
+				# We have an open LUKS device
+
+				echo "        Encrypted storage on $MY_DRIVE is open. We can perform the 'undock' process."
+				echo
+				echo "Step 2: Unmount the filesystem on the encrypted storage."
+				echo
+
+				# Determine if the filesystem is mounted properly.
+				MOUNT_STATUS=`mount | fgrep "$MAPPER_POINT"`
+
+				# Remove everything after <space>type on a result like this:
+				#/dev/mapper/usb3 on /mnt/usb3 type ext4 (rw,relatime,user_xattr,barrier=1,data=ordered)
+				MOUNT_STATUS=${MOUNT_STATUS%% type*}
+
+				if [[ $MOUNT_STATUS == "$MAPPER_POINT on $MOUNT_POINT" ]]
+				then
+					echo "        Syncing data before unmounting."
+					sync
+					sleep 5
+
+					echo "        Unmounting filesystem on $MY_DRIVE"
+					umount $MOUNT_POINT
+
+					if (( $? != 0 ))
+					then
+						echo "Error: I can't unmount the filesystem on $MOUNT_POINT. Call for help!"
+						exit 1
+					else
+						echo "        Filesystem unmounted cleanly."
+						echo
+						echo "Step 3: Close the encrypted storage portion of the $MY_DRIVE"
+						echo
+
+						cryptsetup luksClose $LUKS_DEV
+
+						if (( $? != 0 ))
+						then
+							echo "Error: I can't close the encrypted filesystem on $LUKS_DEV. Call for help!"
+							exit 1
+						else
+
+							echo "        Encrypted storage closed cleanly."
+							echo
+							echo "Step 4: Unmount the README partition of $MY_DRIVE"
+							echo
+
+							#echo "Unmounting README partition."
+							umount $BLOCK_DEV_README_PARTITION > /dev/null 2>&1
+
+							echo "Success! The external storage on $MY_DRIVE is not ready for removal."
+							echo
+							echo "Please power down the dock and remove the drive."
+						fi
+
+					fi # endif - undocking process - unmount LUKS filesystem
+
+				else
+					echo "$MY_DRIVE is not mounted properly."
+				fi # endif - check to see if LUKS device is mounted
+
+			else
+				# The LUKS device is not open, we can't perform the normal undocking procedure.
+				echo "The storage in $MY_DRIVE is not open for use.  Did you 'offsite dock $MY_DRIVE' first?"
+				exit 1
+			fi # endif - undocking procedure - no LUKS active for closing
+
+		elif [[ $MY_ACTION == "status" ]]
+		then
+
+			echo "Status of storage $MY_DRIVE:"
+			echo
+
+			if [[ $LUKS_ACTIVE == "active" ]]
+			then
+				echo "The encrypted storage block on $MY_DRIVE is active."
+				echo
+				cryptsetup status $LUKS_DEV
+			else
+				echo "The encrypted storage block on $MY_DRIVE is inactive."
+			fi
+
+			# Determine if the filesystem is mounted properly.
+			MOUNT_STATUS=`mount | fgrep "$MAPPER_POINT"`
+
+			# Remove everything after <space>type on a result like this:
+			#/dev/mapper/usb3 on /mnt/usb3 type ext4 (rw,relatime,user_xattr,barrier=1,data=ordered)
+			MOUNT_STATUS=${MOUNT_STATUS%% type*}
+
+			if [[ $MOUNT_STATUS == "$MAPPER_POINT on $MOUNT_POINT" ]]
+			then
+				echo
+				echo "The filesystem on the encrypted portion of $MY_DRIVE is mounted for use."
+				echo
+				mount | fgrep "$MAPPER_POINT"
+				echo
+				df -h $MAPPER_POINT
+			else
+				echo
+				echo "The filesystem on the encrypted portion of $MY_DRIVE is NOT mounted for use."
+			fi
+			echo
+
+		fi # endif - status procedure
+
+	else
+		echo "I don't see $BLOCK_DEV present on this system."
+		echo
+		echo "Is the dock plugged in and powered on?"
+		exit 1
+	fi
+	
+else
+	usage
+	exit 1
+fi

@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# dockprobe - Scan a USB dock storage for partitions. Triggered by udev rules.
+#
+# dockprobe is called by /etc/udev/rules.d/89-usb-dock.rules.
+#
+# When a new hard drive is installed in a dock and the dock is powered on or plugged in,
+# the udev system triggers a rule specific to the whole dock.  The rule symlinks the docks
+# normal /dev/sdX entry with something consistent such as /dev/usb3dock.
+# 
+# Unfortunately, udev does not find the individual partitions when the above is performed.
+# So the rule for the whole hard drive also calls this script.
+#
+# If the rule is for a whole hard drive parameters such as this are called:
+# dockprobe device usb3dock sdf <empty>
+#
+# dockprobe notices that the last parameter is empty and runs partprobe on the entire
+# dock device.  This triggers more udev events and a nearly identical rule for the dock
+# in the rule file is called for individual partitions.  When that rule calls dockprobe
+# dockprobe reports that it is being called for debugging purposes but does not run partprobe
+# on the partition.
+
+# $1 is a debugging parameter: 'device' or 'partition' depending on rule.
+DEBUG_PARM=${1:-"null"}
+
+# $2 is the symlink name for this device. Used to report before/after devices in /dev
+SYMLINK_NAME=${2:-"null"}
+
+# $3 is the name of the kernel device for the USB drive such as 'sdf'
+KERNEL_DEV=${3:-"null"}
+
+# $4 is the partition number. Empty for whole devices, numbered for individual partitions
+DEV_NUMBER=${4:-"null"}
+
+# LOG FILE
+OUTFILE=/var/log/dockprobe.log
+
+# Check to see if we have, at least, a /dev entry to process 
+if [[ $KERNEL_DEV != "null" ]]
+then
+
+	# Mark the beginning of this pass in the log file
+	echo -ne "\n\n\n----- BEGIN -----" >> $OUTFILE
+	date >> $OUTFILE
+
+	# Report that we're running and our parameters to the log file and system log
+	echo "/etc/dockprobe: [$DEBUG_PARM] [SYM $SYMLINK_NAME] [KERNEL $KERNEL_DEV] [DEV_NUM $DEV_NUMBER]" >> $OUTFILE 
+	logger "/etc/dockprobe: [$DEBUG_PARM] [SYM $SYMLINK_NAME] [KERNEL $KERNEL_DEV] [DEV_NUM $DEV_NUMBER]"
+
+	# If we are not a partition, let's run partprobe.  Otherwise, just skip.
+	if [[ $DEV_NUMBER == "null" ]]
+	then
+
+		echo "--- Before ---" >> $OUTFILE
+		ls -l /dev/${KERNEL_DEV}* /dev/${SYMLINK_NAME}* >> $OUTFILE 2>&1
+
+		echo "--- Executing partprobe on /dev/$KERNEL_DEV ---" >> $OUTFILE
+		/sbin/partprobe -s /dev/$KERNEL_DEV >> $OUTFILE 2>&1
+
+	else
+		echo "Skipping partprobe - this is not a whole device." >> $OUTFILE
+	fi
+
+	# Regardless of whether we're a whole device or partition, record what we see at the time.
+	echo "--- After ---" >> $OUTFILE
+	ls -l /dev/${KERNEL_DEV}* /dev/${SYMLINK_NAME}* >> $OUTFILE 2>&1
+
+else
+	echo "You must supply a device in /dev to scan."
+fi

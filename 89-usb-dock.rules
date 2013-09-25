@@ -1,0 +1,33 @@
+# USB2 dock, whole storage device.
+KERNEL=="sd*[!0-9]", SUBSYSTEMS=="usb", \
+	ATTRS{serial}=="DCA45536787F", \
+	ATTRS{configuration}=="USB Mass Storage", \
+	ATTRS{manufacturer}=="JMicron", \
+	SYMLINK+="usb2dock%n", \
+  RUN="/etc/dockprobe device usb3dock $kernel $number"
+
+# USB2 dock, individual partitions
+KERNEL=="sd*[0-9]", SUBSYSTEMS=="usb", \
+	ATTRS{serial}=="DCA45536787F", \
+	ATTRS{configuration}=="USB Mass Storage", \
+	ATTRS{manufacturer}=="JMicron", \
+	SYMLINK+="usb2dock%n", \
+  RUN="/etc/dockprobe partition usb3dock $kernel $number"
+
+# USB3 dock, whole storage device.
+KERNEL=="sd*[!0-9]", SUBSYSTEMS=="usb", \
+	ATTRS{serial}=="      JK1130YAH1RWET", \
+	ATTRS{product}=="MassStorage Device", \
+	ATTRS{idVendor}=="1759", \
+	ATTRS{idProduct}=="5100", \
+	SYMLINK+="usb3dock%n", \
+  RUN="/etc/dockprobe device usb3dock $kernel $number"
+
+# USB3 dock, individual partitions
+KERNEL=="sd*[0-9]", SUBSYSTEMS=="usb", \
+	ATTRS{serial}=="      JK1130YAH1RWET", \
+	ATTRS{product}=="MassStorage Device", \
+	ATTRS{idVendor}=="1759", \
+	ATTRS{idProduct}=="5100", \
+	SYMLINK+="usb3dock%n", \
+  RUN="/etc/dockprobe partition usb3dock $kernel $number"
